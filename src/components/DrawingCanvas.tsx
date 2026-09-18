@@ -241,19 +241,19 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, {
         <p className="text-xs text-hlg-charcoal bg-amber-50 border border-hlg-gold rounded p-1.5 mb-2 font-medium">
           Scale matched from an exact aerial measurement of {calibration.label ?? "a reference feature"}
           {" "}(~{calibration.knownDistanceFeet.toFixed(1)} ft) — the number is exact, only the photo-matching
-          is AI's judgment. Worth a quick glance, or click Calibrate Scale to correct it.
+          is AI&apos;s judgment. Worth a quick glance, or click Calibrate Scale to correct it.
         </p>
       )}
       {calibration && calibration.source === "ai_guess" && (
         <p className="text-xs text-hlg-red-dark mb-2 font-medium">
-          ⚠ Scale auto-estimated from AI's guess of a {calibration.label ?? "reference object"}
+          ⚠ Scale auto-estimated from AI&apos;s guess of a {calibration.label ?? "reference object"}
           {" "}(~{calibration.knownDistanceFeet} ft assumed) — not a real measurement. Verify it, or click
           Calibrate Scale to correct it.
         </p>
       )}
       {calibration && calibration.source === "auto_geo" && (
         <p className="text-xs text-hlg-green mb-2">
-          Scale calibrated automatically and exactly from the aerial image's geometry —
+          Scale calibrated automatically and exactly from the aerial image&apos;s geometry —
           {" "}{calibration.pixelsPerFoot.toFixed(2)} px/ft.
         </p>
       )}

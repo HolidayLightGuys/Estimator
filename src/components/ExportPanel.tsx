@@ -52,7 +52,7 @@ export default function ExportPanel({
         {busy ? "Building PDF…" : "Export Estimate PDF"}
       </button>
       <p className="text-xs text-neutral-400 self-center">
-        Upload the exported file into Workiz manually — direct Workiz upload isn't wired up yet
+        Upload the exported file into Workiz manually — direct Workiz upload isn&apos;t wired up yet
         (see src/services/workiz.ts).
       </p>
     </div>
