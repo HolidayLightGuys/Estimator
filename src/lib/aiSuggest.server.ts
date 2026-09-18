@@ -96,6 +96,21 @@ function pixelDistance(a: [number, number], b: [number, number]): number {
   return Math.hypot(b[0] - a[0], b[1] - a[1]);
 }
 
+/**
+ * Normalizes a raw (untyped, from JSON.parse) confidence value down to
+ * exactly the "low" | "medium" | "high" literal union — an explicit return
+ * type annotation here guarantees the result's type, rather than relying
+ * on a ternary whose branches TypeScript may or may not narrow correctly
+ * when one side comes from an `any`-typed source (this caused a real build
+ * failure: "Type 'string' is not assignable to type '\"low\" | \"medium\" |
+ * \"high\"'" — `next dev` doesn't type-check as strictly as `next build`,
+ * which is why this only surfaced during a production build).
+ */
+function toConfidence(value: unknown, allowHigh: boolean): "low" | "medium" | "high" {
+  if (allowHigh && value === "high") return "high";
+  return value === "medium" ? "medium" : "low";
+}
+
 export async function suggestLines(params: {
   /** The primary/display image — lines get suggested in this image's pixel space. */
   imageUrl: string;
@@ -214,7 +229,7 @@ Suggest roofline/porch/pathway lines matching this request on Image 1.${
             feet,
             points: ref.primaryPoints,
             method: "aerial_cross_reference" as const,
-            confidence: ["low", "medium", "high"].includes(ref.confidence) ? ref.confidence : "medium",
+            confidence: toConfidence(ref.confidence, true),
             notes: typeof ref.notes === "string" ? ref.notes : undefined,
           };
         }
@@ -228,7 +243,7 @@ Suggest roofline/porch/pathway lines matching this request on Image 1.${
           feet: ref.assumedFeet,
           points: ref.primaryPoints,
           method: "assumed_standard_size" as const,
-          confidence: ref.confidence === "medium" ? "medium" : "low",
+          confidence: toConfidence(ref.confidence, false),
           notes: typeof ref.notes === "string" ? ref.notes : undefined,
         };
       }
