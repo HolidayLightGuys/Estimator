@@ -46,8 +46,23 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
   // cheap heuristic, not a guarantee — an address in the right state but
   // the wrong county still hits that same timeout cost once, then falls
   // through normally.
-  const looksLikeKansas = /\b(ks|kansas)\b/i.test(address);
-  const looksLikeMissouri = /\b(mo|missouri)\b/i.test(address);
+  //
+  // "Kansas City" is a real bug trap here: it's a MISSOURI city whose name
+  // contains the literal word "Kansas" — a naive /\bkansas\b/ check on the
+  // full address string false-matches it, misrouting Missouri addresses to
+  // the Kansas scraper (confirmed happening in production logs). Fix:
+  // prefer matching the state token that comes right after the address's
+  // last comma (the actual state field in "Street City, State Zip"), which
+  // "Kansas City" never satisfies since it sits before that comma, not
+  // after it. Only fall back to a whole-string check if no comma segment
+  // matched either state — and even then, check Missouri first specifically
+  // because of this same false-positive risk.
+  const lastCommaSegment = address.slice(address.lastIndexOf(",") + 1);
+  const looksLikeMissouri =
+    /\b(missouri|mo)\b/i.test(lastCommaSegment) || /\b(missouri|mo)\b/i.test(address);
+  const looksLikeKansas =
+    !looksLikeMissouri &&
+    (/\b(kansas|ks)\b/i.test(lastCommaSegment) || /\b(kansas|ks)\b/i.test(address));
   console.log(
     `[propertyImage] address "${address}" -> looksLikeKansas=${looksLikeKansas}, looksLikeMissouri=${looksLikeMissouri}`
   );
