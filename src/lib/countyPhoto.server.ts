@@ -67,6 +67,55 @@ function trimForCountySearch(address: string): string {
     .trim();
 }
 
+/**
+ * Abbreviates directionals and street types to what both counties' search
+ * widgets actually expect — confirmed by direct manual testing against the
+ * live sites: "415 East 12th Street" (spelled out, from the geocoder's
+ * structured data) returns zero matches, while "415 E 12TH ST" (abbreviated)
+ * works. Jackson County's own on-page instructions even say this explicitly:
+ * "Street types are in standard abbreviations (e.g. St, Pl, Ave)." Applied
+ * to the geocoder's streetOnly value before it's typed into either county's
+ * search box.
+ */
+function abbreviateStreetAddress(street: string): string {
+  const directionals: Record<string, string> = {
+    north: "N",
+    south: "S",
+    east: "E",
+    west: "W",
+    northeast: "NE",
+    northwest: "NW",
+    southeast: "SE",
+    southwest: "SW",
+  };
+  const streetTypes: Record<string, string> = {
+    street: "St",
+    road: "Rd",
+    avenue: "Ave",
+    boulevard: "Blvd",
+    drive: "Dr",
+    lane: "Ln",
+    court: "Ct",
+    place: "Pl",
+    circle: "Cir",
+    parkway: "Pkwy",
+    highway: "Hwy",
+    terrace: "Ter",
+    trail: "Trl",
+    way: "Way",
+  };
+
+  return street
+    .split(/\s+/)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (directionals[lower]) return directionals[lower];
+      if (streetTypes[lower]) return streetTypes[lower];
+      return word;
+    })
+    .join(" ");
+}
+
 export async function fetchJohnsonCountyElevationPhoto(
   address: string,
   /**
@@ -78,7 +127,7 @@ export async function fetchJohnsonCountyElevationPhoto(
   streetOnly?: string
 ): Promise<CountyElevationPhoto | null> {
   const log = (msg: string) => console.log(`[johnsonCountyPhoto] ${msg}`);
-  const searchText = streetOnly || trimForCountySearch(address);
+  const searchText = abbreviateStreetAddress(streetOnly || trimForCountySearch(address));
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
     return null;
@@ -196,7 +245,7 @@ export async function fetchJacksonCountyPhoto(
   streetOnly?: string
 ): Promise<CountyElevationPhoto | null> {
   const log = (msg: string) => console.log(`[jacksonCountyPhoto] ${msg}`);
-  const searchText = streetOnly || trimForCountySearch(address);
+  const searchText = abbreviateStreetAddress(streetOnly || trimForCountySearch(address));
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
     return null;
