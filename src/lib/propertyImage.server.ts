@@ -70,13 +70,15 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
   let streetView: StreetViewImageInfo | null = null;
 
   let countyPhoto: { imageUrl: string; imageDate: string | null } | null = null;
+  console.log(`[propertyImage] streetOnly from geocoder: ${geo.streetOnly ?? "(not available — falling back to regex trim)"}`);
+
   if (looksLikeKansas) {
-    countyPhoto = await fetchJohnsonCountyElevationPhoto(address).catch((err) => {
+    countyPhoto = await fetchJohnsonCountyElevationPhoto(address, geo.streetOnly).catch((err) => {
       console.log(`[propertyImage] Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     });
   } else if (looksLikeMissouri) {
-    countyPhoto = await fetchJacksonCountyPhoto(address).catch((err) => {
+    countyPhoto = await fetchJacksonCountyPhoto(address, geo.streetOnly).catch((err) => {
       console.log(`[propertyImage] Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     });

@@ -68,10 +68,17 @@ function trimForCountySearch(address: string): string {
 }
 
 export async function fetchJohnsonCountyElevationPhoto(
-  address: string
+  address: string,
+  /**
+   * A clean "[house number] [street]" string from the geocoder's structured
+   * address data (see src/lib/geocode.ts), if available. Preferred over the
+   * regex-trimmed fallback below, since that trim can't reliably strip a
+   * city name with no comma separating it from the street.
+   */
+  streetOnly?: string
 ): Promise<CountyElevationPhoto | null> {
   const log = (msg: string) => console.log(`[johnsonCountyPhoto] ${msg}`);
-  const searchText = trimForCountySearch(address);
+  const searchText = streetOnly || trimForCountySearch(address);
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
     return null;
@@ -92,7 +99,7 @@ export async function fetchJohnsonCountyElevationPhoto(
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
     });
     const page = await browser.newPage();
-    await page.setDefaultTimeout(15000);
+    await page.setDefaultTimeout(20000);
 
     await page.goto("https://ims.jocogov.org/locationservices/", { waitUntil: "domcontentloaded" });
     log("page loaded");
@@ -101,20 +108,20 @@ export async function fetchJohnsonCountyElevationPhoto(
     // — this doesn't change what was actually agreed to, just automates
     // clicking through it.
     try {
-      await page.waitForSelector("#btnDisclaimerYes", { timeout: 5000 });
+      await page.waitForSelector("#btnDisclaimerYes", { timeout: 12000 });
       await page.click("#btnDisclaimerYes");
       log("accepted disclaimer dialog");
     } catch {
       log("no disclaimer dialog appeared (already accepted this session, or page structure changed)");
     }
 
-    await page.waitForSelector("#tbSearchID", { timeout: 10000 });
+    await page.waitForSelector("#tbSearchID", { timeout: 15000 });
     await page.click("#tbSearchID");
     await page.type("#tbSearchID", searchText, { delay: 40 });
     log("typed search text into #tbSearchID");
 
     // jQuery UI autocomplete — wait for the suggestion list to populate.
-    await page.waitForSelector(".ui-autocomplete li", { timeout: 8000 });
+    await page.waitForSelector(".ui-autocomplete li", { timeout: 15000 });
     log("autocomplete suggestions appeared");
 
     // The first item is a non-clickable category header ("Address") in
@@ -144,7 +151,7 @@ export async function fetchJohnsonCountyElevationPhoto(
     await page.waitForSelector("#ifrFrontElev", { timeout: 15000 });
     log("#ifrFrontElev iframe appeared");
     // Give the iframe's own content a moment to finish loading images.
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 3500));
 
     const result = await page.evaluate(() => {
       const frame = document.getElementById("ifrFrontElev") as HTMLIFrameElement | null;
@@ -184,9 +191,12 @@ export async function fetchJohnsonCountyElevationPhoto(
  * header note #6 for exactly why (a closed shadow root blocks any other
  * approach to that one popup).
  */
-export async function fetchJacksonCountyPhoto(address: string): Promise<CountyElevationPhoto | null> {
+export async function fetchJacksonCountyPhoto(
+  address: string,
+  streetOnly?: string
+): Promise<CountyElevationPhoto | null> {
   const log = (msg: string) => console.log(`[jacksonCountyPhoto] ${msg}`);
-  const searchText = trimForCountySearch(address);
+  const searchText = streetOnly || trimForCountySearch(address);
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
     return null;
@@ -211,20 +221,20 @@ export async function fetchJacksonCountyPhoto(address: string): Promise<CountyEl
     // stable only at this exact size. Changing this without re-verifying
     // those coordinates will break the flow.
     await page.setViewport({ width: 1006, height: 533 });
-    await page.setDefaultTimeout(15000);
+    await page.setDefaultTimeout(20000);
 
     await page.goto("https://jcgis.jacksongov.org/parcelviewer/", { waitUntil: "domcontentloaded" });
     log("page loaded");
 
     try {
-      await page.waitForSelector("#btnAgree", { timeout: 5000 });
+      await page.waitForSelector("#btnAgree", { timeout: 12000 });
       await page.click("#btnAgree");
       log("accepted disclaimer dialog");
     } catch {
       log("no disclaimer dialog appeared (already accepted this session, or page structure changed)");
     }
 
-    await page.waitForSelector("#searchDiv-input", { timeout: 10000 });
+    await page.waitForSelector("#searchDiv-input", { timeout: 15000 });
     await page.click("#searchDiv-input");
     // This Esri search widget only responds to real keystroke events —
     // page.type sends those. Setting .value directly does NOT trigger its
@@ -232,7 +242,7 @@ export async function fetchJacksonCountyPhoto(address: string): Promise<CountyEl
     await page.type("#searchDiv-input", searchText, { delay: 60 });
     log("typed search text into #searchDiv-input");
 
-    await page.waitForSelector("li.esri-menu__list-item[role=option]", { timeout: 8000 });
+    await page.waitForSelector("li.esri-menu__list-item[role=option]", { timeout: 15000 });
     log("autocomplete suggestions appeared");
     const clickedSuggestion = await page.evaluate(() => {
       function findDeep(root: Document | ShadowRoot, sel: string): Element | null {
@@ -264,13 +274,13 @@ export async function fetchJacksonCountyPhoto(address: string): Promise<CountyEl
     // then click its center. See file header note #6 — this and the click
     // below are coordinate-based because the resulting popup lives inside
     // a closed shadow root with no selector-based way in.
-    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await new Promise((resolve) => setTimeout(resolve, 4000));
     await page.mouse.click(503, 266);
     log("clicked map center (attempting to open BASIC INFORMATION popup)");
 
     // "CLICK FOR PROPERTY INFO" inside that same closed-shadow-root popup —
     // same coordinate-click necessity.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 3000));
     await page.mouse.click(300, 437);
     log("clicked CLICK FOR PROPERTY INFO coordinate");
 
@@ -279,7 +289,7 @@ export async function fetchJacksonCountyPhoto(address: string): Promise<CountyEl
     await page.waitForSelector("#photostab", { timeout: 15000 });
     log("#photostab tab appeared");
     await page.click("#photostab");
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, 3500));
 
     const imageUrl = await page.evaluate(() => {
       function allImgsDeep(root: Document | ShadowRoot, out: HTMLImageElement[]) {

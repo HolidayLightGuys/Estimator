@@ -7,6 +7,17 @@ export interface GeocodeResult {
   lng: number;
   /** Which provider actually answered — surfaced so the UI/PDF can be honest about source quality. */
   provider: "google" | "osm";
+  /**
+   * Just "[house number] [street name]" with no city/state/zip, when the
+   * provider's structured address data made this extractable. Needed by
+   * src/lib/countyPhoto.server.ts — both county search boxes expect
+   * street-only input, and a plain regex trim of the raw typed address
+   * can't reliably strip a city name that has no comma separating it from
+   * the street (confirmed breaking in production: "2 East Dartmouth Road
+   * Kansas City" still had "Kansas City" attached, and never matched).
+   * Falls back to undefined if extraction wasn't possible.
+   */
+  streetOnly?: string;
 }
 
 export interface GeocodeError {
@@ -58,11 +69,21 @@ async function geocodeWithGoogle(
     }
 
     const result = data.results[0];
+
+    // Google's address_components carry a "types" array — pull just the
+    // street number and route (street name) to build a clean street-only
+    // string, ignoring locality/city entirely.
+    const components: Array<{ long_name: string; types: string[] }> = result.address_components ?? [];
+    const streetNumber = components.find((c) => c.types.includes("street_number"))?.long_name;
+    const route = components.find((c) => c.types.includes("route"))?.long_name;
+    const streetOnly = streetNumber && route ? `${streetNumber} ${route}` : undefined;
+
     return {
       formattedAddress: result.formatted_address,
       lat: result.geometry.location.lat,
       lng: result.geometry.location.lng,
       provider: "google",
+      streetOnly,
     };
   } catch (err) {
     return {
@@ -80,7 +101,9 @@ async function geocodeWithNominatim(
   url.searchParams.set("q", address);
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "1");
-  url.searchParams.set("addressdetails", "0");
+  // addressdetails=1 gives structured components (house_number, road, etc.)
+  // — needed to build a clean street-only string for the county scrapers.
+  url.searchParams.set("addressdetails", "1");
 
   try {
     const res = await fetch(url.toString(), {
@@ -101,11 +124,16 @@ async function geocodeWithNominatim(
     }
 
     const result = data[0];
+    const addr = result.address ?? {};
+    const streetOnly =
+      addr.house_number && addr.road ? `${addr.house_number} ${addr.road}` : undefined;
+
     return {
       formattedAddress: result.display_name,
       lat: parseFloat(result.lat),
       lng: parseFloat(result.lon),
       provider: "osm",
+      streetOnly,
     };
   } catch (err) {
     return {
