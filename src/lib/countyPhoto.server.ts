@@ -80,7 +80,17 @@ export async function fetchJohnsonCountyElevationPhoto(
 
   let browser;
   try {
-    browser = await puppeteer.launch({ headless: true });
+    browser = await puppeteer.launch({
+      headless: true,
+      // Required for Puppeteer's Chromium to launch inside most Linux
+      // containers (Railway, Docker, etc.) — the default sandbox needs
+      // kernel permissions those environments don't grant. Without these,
+      // launch() throws immediately and this whole function silently
+      // returns null, which looks identical to "county not found" from the
+      // caller's side. Not needed on Windows/Mac, which is why this worked
+      // locally the whole time but failed once deployed.
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
     const page = await browser.newPage();
     await page.setDefaultTimeout(15000);
 
@@ -185,7 +195,17 @@ export async function fetchJacksonCountyPhoto(address: string): Promise<CountyEl
 
   let browser;
   try {
-    browser = await puppeteer.launch({ headless: true });
+    browser = await puppeteer.launch({
+      headless: true,
+      // Required for Puppeteer's Chromium to launch inside most Linux
+      // containers (Railway, Docker, etc.) — the default sandbox needs
+      // kernel permissions those environments don't grant. Without these,
+      // launch() throws immediately and this whole function silently
+      // returns null, which looks identical to "county not found" from the
+      // caller's side. Not needed on Windows/Mac, which is why this worked
+      // locally the whole time but failed once deployed.
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+    });
     const page = await browser.newPage();
     // Fixed viewport — the two coordinate-based clicks below were verified
     // stable only at this exact size. Changing this without re-verifying
