@@ -1,0 +1,188 @@
+// Server-side only — shared by src/app/api/property-image/route.ts (manual
+// "Load Property" button) AND src/services/workiz.ts (automated webhook
+// intake), so both paths behave identically.
+//
+// Fetches BOTH a street-level photo (for display/export) and a top-down
+// aerial image (for exact scale) from a single geocode lookup. The aerial
+// image's scale is mathematically derivable from its known zoom level and
+// geography — never a guess. The street-level photo has no such thing
+// (a flat photo has no depth information), which is exactly why we also
+// fetch the aerial one: src/lib/aiSuggest.server.ts uses it to find a real
+// feature visible in both photos and import the aerial's exact scale into
+// the street-view photo via that match.
+
+import { geocodeAddress } from "@/lib/geocode";
+import { fetchJohnsonCountyElevationPhoto, fetchJacksonCountyPhoto } from "@/lib/countyPhoto.server";
+import type { AerialImageInfo, PropertyImagesResult, StreetViewImageInfo } from "@/types";
+
+const IMAGE_WIDTH_PX = 640;
+const IMAGE_HEIGHT_PX = 400;
+const METERS_TO_FEET = 3.28084;
+
+export async function fetchPropertyImages(address: string): Promise<PropertyImagesResult> {
+  const geo = await geocodeAddress(address);
+  if ("error" in geo) {
+    return { available: false, error: geo.error, streetView: null, aerial: null };
+  }
+
+  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+
+  const aerial: AerialImageInfo = apiKey
+    ? buildGoogleAerial(geo.lat, geo.lng, apiKey)
+    : buildFreeAerial(geo.lat, geo.lng);
+
+  // Prefer a real county assessor elevation photo when one can be found —
+  // see src/lib/countyPhoto.server.ts for what this covers (Johnson County,
+  // KS and Jackson County, MO, so far) and its real caveats, including a
+  // closed-shadow-root workaround for Jackson County that's more fragile
+  // than the rest. Falls through to Google Street View when nothing is
+  // found (any other county, or either scraper hitting an error) — this is
+  // intentionally silent-and-graceful, not an error condition.
+  //
+  // Only worth attempting the matching scraper for addresses that look like
+  // they're in that state — both scrapers are single-county specific, and
+  // running one against an address from the wrong state would just burn
+  // 10+ seconds hitting timeouts before falling through anyway. This is a
+  // cheap heuristic, not a guarantee — an address in the right state but
+  // the wrong county still hits that same timeout cost once, then falls
+  // through normally.
+  const looksLikeKansas = /\b(ks|kansas)\b/i.test(address);
+  const looksLikeMissouri = /\b(mo|missouri)\b/i.test(address);
+  console.log(
+    `[propertyImage] address "${address}" -> looksLikeKansas=${looksLikeKansas}, looksLikeMissouri=${looksLikeMissouri}`
+  );
+
+  let streetView: StreetViewImageInfo | null = null;
+
+  let countyPhoto: { imageUrl: string; imageDate: string | null } | null = null;
+  if (looksLikeKansas) {
+    countyPhoto = await fetchJohnsonCountyElevationPhoto(address).catch((err) => {
+      console.log(`[propertyImage] Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+  } else if (looksLikeMissouri) {
+    countyPhoto = await fetchJacksonCountyPhoto(address).catch((err) => {
+      console.log(`[propertyImage] Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    });
+  } else {
+    console.log("[propertyImage] address didn't look Kansas- or Missouri-based — skipping county scraper entirely, going straight to Google/aerial");
+  }
+
+  if (countyPhoto) {
+    streetView = {
+      imageUrl: countyPhoto.imageUrl,
+      source: "county_assessor",
+      imageDate: countyPhoto.imageDate,
+    };
+  } else if (apiKey) {
+    streetView = await tryBuildStreetView(geo.lat, geo.lng, apiKey);
+  }
+
+  return {
+    available: true,
+    formattedAddress: geo.formattedAddress,
+    lat: geo.lat,
+    lng: geo.lng,
+    streetView,
+    aerial,
+  };
+}
+
+async function tryBuildStreetView(
+  lat: number,
+  lng: number,
+  apiKey: string
+): Promise<StreetViewImageInfo | null> {
+  const metadataUrl = new URL("https://maps.googleapis.com/maps/api/streetview/metadata");
+  metadataUrl.searchParams.set("location", `${lat},${lng}`);
+  metadataUrl.searchParams.set("key", apiKey);
+
+  try {
+    const metaRes = await fetch(metadataUrl.toString());
+    const meta = await metaRes.json();
+    if (meta.status !== "OK") return null;
+  } catch {
+    return null;
+  }
+
+  const streetViewUrl = new URL("https://maps.googleapis.com/maps/api/streetview");
+  streetViewUrl.searchParams.set("size", `${IMAGE_WIDTH_PX}x${IMAGE_HEIGHT_PX}`);
+  streetViewUrl.searchParams.set("location", `${lat},${lng}`);
+  streetViewUrl.searchParams.set("fov", "80");
+  streetViewUrl.searchParams.set("key", apiKey);
+
+  return { imageUrl: streetViewUrl.toString(), source: "google_street_view" };
+}
+
+/**
+ * Google Static Maps images use the standard Web Mercator tile resolution:
+ * metersPerPixel = 156543.03392 * cos(latitude) / 2^zoom
+ * (valid at the default `scale=1`). Holds uniformly in both directions near
+ * the map's center, so one value works for both x and y at this zoom.
+ */
+function buildGoogleAerial(lat: number, lng: number, apiKey: string): AerialImageInfo {
+  const zoom = 20;
+  const staticMapUrl = new URL("https://maps.googleapis.com/maps/api/staticmap");
+  staticMapUrl.searchParams.set("center", `${lat},${lng}`);
+  staticMapUrl.searchParams.set("zoom", String(zoom));
+  staticMapUrl.searchParams.set("size", `${IMAGE_WIDTH_PX}x${IMAGE_HEIGHT_PX}`);
+  staticMapUrl.searchParams.set("maptype", "satellite");
+  staticMapUrl.searchParams.set("key", apiKey);
+
+  const metersPerPixel = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  const feetPerPixel = metersPerPixel * METERS_TO_FEET;
+  const pixelsPerFoot = 1 / feetPerPixel;
+  const referenceFeet = IMAGE_WIDTH_PX * feetPerPixel;
+
+  return {
+    imageUrl: staticMapUrl.toString(),
+    source: "static_map",
+    pixelsPerFoot,
+    referenceFeet,
+  };
+}
+
+/**
+ * Free, keyless aerial image from Esri's public World Imagery service.
+ * Bounding box aspect ratio matches the image's aspect ratio (640:400) so
+ * ground distance-per-pixel is identical in both directions.
+ */
+function buildFreeAerial(lat: number, lng: number): AerialImageInfo {
+  const groundWidthMeters = 60;
+  const groundHeightMeters = groundWidthMeters * (IMAGE_HEIGHT_PX / IMAGE_WIDTH_PX);
+
+  const metersPerDegreeLat = 110_540;
+  const metersPerDegreeLng = 111_320 * Math.cos((lat * Math.PI) / 180);
+
+  const halfLatDelta = groundHeightMeters / 2 / metersPerDegreeLat;
+  const halfLngDelta = groundWidthMeters / 2 / metersPerDegreeLng;
+
+  const bbox = [
+    lng - halfLngDelta,
+    lat - halfLatDelta,
+    lng + halfLngDelta,
+    lat + halfLatDelta,
+  ].join(",");
+
+  const url = new URL(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/export"
+  );
+  url.searchParams.set("bbox", bbox);
+  url.searchParams.set("bboxSR", "4326");
+  url.searchParams.set("imageSR", "4326");
+  url.searchParams.set("size", `${IMAGE_WIDTH_PX},${IMAGE_HEIGHT_PX}`);
+  url.searchParams.set("format", "png");
+  url.searchParams.set("transparent", "false");
+  url.searchParams.set("f", "image");
+
+  const referenceFeet = groundWidthMeters * METERS_TO_FEET;
+  const pixelsPerFoot = IMAGE_WIDTH_PX / referenceFeet;
+
+  return {
+    imageUrl: url.toString(),
+    source: "satellite_free",
+    pixelsPerFoot,
+    referenceFeet,
+  };
+}
