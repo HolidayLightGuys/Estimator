@@ -11,6 +11,8 @@ const CANVAS_HEIGHT = 400;
 
 const LINE_TYPE_LABELS: Record<LineType, string> = {
   front_roofline: "Front Roofline",
+  peak: "Peak",
+  side_roofline: "Side Roofline",
   porch_roof_wrap: "Porch Roof Wrap",
   pathway: "Pathway",
   other: "Other",

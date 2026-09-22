@@ -12,7 +12,8 @@
 // the street-view photo via that match.
 
 import { geocodeAddress } from "@/lib/geocode";
-import { fetchJohnsonCountyElevationPhoto, fetchJacksonCountyPhoto } from "@/lib/countyPhoto.server";
+import { fetchJohnsonCountyElevationPhotos, fetchJacksonCountyPhotos } from "@/lib/countyPhoto.server";
+import { selectFrontFacingPhoto } from "@/lib/aiSuggest.server";
 import type { AerialImageInfo, PropertyImagesResult, StreetViewImageInfo } from "@/types";
 
 const IMAGE_WIDTH_PX = 640;
@@ -69,21 +70,30 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
 
   let streetView: StreetViewImageInfo | null = null;
 
-  let countyPhoto: { imageUrl: string; imageDate: string | null } | null = null;
+  let candidates: { imageUrl: string; imageDate: string | null }[] = [];
   console.log(`[propertyImage] streetOnly from geocoder: ${geo.streetOnly ?? "(not available — falling back to regex trim)"}`);
 
   if (looksLikeKansas) {
-    countyPhoto = await fetchJohnsonCountyElevationPhoto(address, geo.streetOnly).catch((err) => {
+    candidates = await fetchJohnsonCountyElevationPhotos(address, geo.streetOnly).catch((err) => {
       console.log(`[propertyImage] Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      return [];
     });
   } else if (looksLikeMissouri) {
-    countyPhoto = await fetchJacksonCountyPhoto(address, geo.streetOnly).catch((err) => {
+    candidates = await fetchJacksonCountyPhotos(address, geo.streetOnly).catch((err) => {
       console.log(`[propertyImage] Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
+      return [];
     });
   } else {
     console.log("[propertyImage] address didn't look Kansas- or Missouri-based — skipping county scraper entirely, going straight to Google/aerial");
+  }
+
+  let countyPhoto: { imageUrl: string; imageDate: string | null } | null = null;
+  if (candidates.length > 0) {
+    console.log(`[propertyImage] ${candidates.length} county photo candidate(s) found — asking AI which one shows the front`);
+    countyPhoto = await selectFrontFacingPhoto(candidates).catch((err) => {
+      console.log(`[propertyImage] selectFrontFacingPhoto threw: ${err instanceof Error ? err.message : String(err)}`);
+      return candidates[0] ?? null;
+    });
   }
 
   if (countyPhoto) {

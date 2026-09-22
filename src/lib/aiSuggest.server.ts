@@ -41,7 +41,7 @@ function buildSystemPrompt(hasAerial: boolean): string {
 - This is ALWAYS an assumption, never a measurement of this specific house — confidence must be "low" or "medium", never "high".
 - If you cannot confidently identify such an object, set "scaleReference" to null — null is the correct answer more often than not.`;
 
-  return `You are assisting a Christmas light installation company in estimating where to draw lighting lines on a photo of a house.
+  return `You are assisting a Christmas light installation company. Your ONLY job is to trace the ACTUAL visible roofline edges in this photo — like a professional outlining exactly where lights would be hung, not a rough sketch or a decorative placement.
 
 Respond with ONLY valid JSON — no prose, no markdown code fences — matching exactly this shape:
 
@@ -49,8 +49,8 @@ Respond with ONLY valid JSON — no prose, no markdown code fences — matching 
   "suggestedLines": [
     {
       "label": "string, short human-readable label",
-      "type": "front_roofline" | "porch_roof_wrap" | "pathway" | "other",
-      "points": [[x, y], [x, y]],
+      "type": "front_roofline" | "peak" | "side_roofline" | "porch_roof_wrap" | "pathway" | "other",
+      "points": [[x, y], [x, y], ...],
       "confidence": "low" | "medium" | "high",
       "notes": "string, optional caveat about this line"
     }
@@ -67,19 +67,34 @@ Respond with ONLY valid JSON — no prose, no markdown code fences — matching 
   "warnings": ["string", "..."]
 }
 
-Rules for suggestedLines:
+CRITICAL RULE — accuracy over completeness: every point in every line must land ON the real roof edge visible in the photo (the line where the roof surface meets the sky, or the eave/fascia line at the bottom of a roof plane) — not floating above it, not cutting across the wall below it, and not an approximate guess placed somewhere "roughly right." If you cannot clearly see where a roofline actually is (blocked by trees, bad angle, too small/blurry), DO NOT invent a plausible-looking line for it — leave it out and explain why in "warnings" instead. A missing line the installer can add by hand is far better than a wrong line that looks confident but sends the crew to the wrong edge.
+
+What each line type means and how to trace it:
+- "front_roofline": the main roofline along the front of the house — the horizontal (or stepped, if the roof has offsets like a lower porch roof) eave line where you'd hang lights along a straight run. If the eave steps down or up partway across the front (e.g. a porch roof lower than the main roof), use extra points to follow that actual step rather than one straight line that skips over it.
+- "peak": one connected line per gable end or dormer visible on the front-facing side — trace up ONE roof edge from the eave to the peak point, then back down the OTHER roof edge to its eave (a "^" shape, minimum 3 points: [left-eave, peak, right-eave]). Do this for every distinct gable/dormer you can see clearly, including the main/tallest peak if the house has one facing the camera. This is one of the most common requests — look carefully for these before deciding none are visible.
+- "side_roofline": a roofline that continues along a visible SIDE of the house (running back from a front corner) — only include this if a side is actually visible at a usable angle in the photo, never guessed for a side you can't see.
+- "porch_roof_wrap": the roofline specifically around a covered porch, where it's a distinct wrap-around structure separate from the main roofline. Rare — only include if the customer's message explicitly mentions a porch.
+- "pathway": a line along a walkway/path, not a roofline at all. Rare — only include if the customer's message explicitly mentions a pathway or walkway.
+- "other": anything else the customer explicitly requested that doesn't fit the above.
+
+Default suggestion strategy (what to suggest even if the customer's message is generic like "just do the lights"):
+1. ALWAYS attempt "front_roofline" — trace the main front eave(s). This is what nearly every customer wants as a baseline.
+2. ALWAYS attempt "peak" for every clearly visible gable/dormer on the front — the combination of front roofline + peaks is the single most common real request for this business. Look hard for these before skipping them.
+3. Include "side_roofline" whenever a side of the house is clearly visible in the photo, even if the customer didn't explicitly ask — it's a common add-on and easy for a human to delete if not wanted.
+4. Do NOT suggest "porch_roof_wrap" or "pathway" unless the customer's message explicitly mentions a porch or a walkway/pathway — these are rare, custom requests, not defaults.
+
+Other rules:
 - All line coordinates are pixel positions in Image 1 (the primary image), 640x400, top-left origin (0,0).
-- Only suggest lines for areas the customer's message actually asked for.
-- Use "low" confidence whenever the roofline is partially blocked, unclear, or you are guessing.
-- Never claim exact measurements for a line — you are only suggesting where it should go.
+- Use "low" confidence whenever the roofline is partially blocked, unclear, or the angle makes it hard to be sure of the exact edge.
+- Never claim exact measurements for a line — you are only suggesting where it should go; a human will calibrate scale separately.
 
 ${scaleReferenceRules}
 
 General:
-- Always add a warning if the photo angle makes any requested lighting area hard to see, or if no usable scale reference was found.`;
+- Always add a warning if the photo angle makes any requested lighting area hard to see or trace confidently, or if no usable scale reference was found.`;
 }
 
-async function imageUrlToDataUrl(imageUrl: string): Promise<string | null> {
+export async function imageUrlToDataUrl(imageUrl: string): Promise<string | null> {
   try {
     const res = await fetch(imageUrl);
     if (!res.ok) return null;
@@ -152,7 +167,7 @@ export async function suggestLines(params: {
   const userText = `Customer request: "${params.message || "(no message provided)"}"
 Requested light color: ${params.color || "(not specified)"}
 
-Suggest roofline/porch/pathway lines matching this request on Image 1.${
+Trace the front roofline and every visible peak/gable on Image 1 by default (per the system instructions), plus side rooflines if a side is visible. Only add porch wrap or pathway lines if the customer's message above explicitly mentions them.${
     aerialActuallyUsable
       ? " Image 2 is a top-down aerial photo of the same property for finding a scale reference — see system instructions."
       : ""
@@ -258,5 +273,88 @@ Suggest roofline/porch/pathway lines matching this request on Image 1.${
         `AI suggestion threw an error: ${err instanceof Error ? err.message : "unknown error"}`,
       ],
     };
+  }
+}
+
+export interface FrontPhotoCandidate {
+  imageUrl: string;
+  imageDate: string | null;
+}
+
+/**
+ * Picks which of several candidate assessor photos actually shows the FRONT
+ * of the house. This exists because county assessor systems (Johnson
+ * County, KS confirmed directly) don't tag photos with which angle they
+ * are — the "most recent" or "currently selected" photo is often a
+ * backyard or side shot, confirmed happening on a real property while
+ * building this. There's no metadata to sort by; the only way to tell is to
+ * actually look at each photo.
+ *
+ * Checks at most the 4 most-recently-dated candidates (cost/time control —
+ * each one is a real image sent to the vision model). Falls back to
+ * candidates[0] (whatever the caller considered the default) on any
+ * failure — missing API key, fetch error, or the model not finding a clear
+ * front-facing shot among the candidates.
+ */
+export async function selectFrontFacingPhoto(
+  candidates: FrontPhotoCandidate[]
+): Promise<FrontPhotoCandidate | null> {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return candidates[0];
+
+  const toCheck = candidates.slice(0, 4);
+  const dataUrls = await Promise.all(toCheck.map((c) => imageUrlToDataUrl(c.imageUrl)));
+
+  const usable: { candidate: FrontPhotoCandidate; dataUrl: string }[] = [];
+  toCheck.forEach((candidate, i) => {
+    if (dataUrls[i]) usable.push({ candidate, dataUrl: dataUrls[i]! });
+  });
+  if (usable.length === 0) return candidates[0];
+  if (usable.length === 1) return usable[0].candidate;
+
+  const content: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: `You will see ${usable.length} numbered photos of the SAME house, taken at different times (they may show different seasons, renovations, or camera angles). Identify which ONE best shows the FRONT of the house — the side facing the street, normally including the main entrance door and/or a garage door. A backyard, a side yard, or a photo where the house isn't clearly visible does NOT count as the front.
+
+Respond with ONLY valid JSON, no prose: {"frontIndex": <1-based number of the best front-facing photo, or 0 if none of them clearly show the front>, "notes": "brief reason"}`,
+    },
+  ];
+  usable.forEach((item, i) => {
+    content.push({ type: "text", text: `Photo ${i + 1}:` });
+    content.push({ type: "image_url", image_url: { url: item.dataUrl } });
+  });
+
+  try {
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content }],
+      }),
+    });
+    if (!res.ok) return candidates[0];
+
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content;
+    if (!raw) return candidates[0];
+
+    const parsed = JSON.parse(raw);
+    const frontIndex = typeof parsed.frontIndex === "number" ? parsed.frontIndex : 0;
+    if (frontIndex >= 1 && frontIndex <= usable.length) {
+      return usable[frontIndex - 1].candidate;
+    }
+    return candidates[0];
+  } catch {
+    return candidates[0];
   }
 }

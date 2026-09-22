@@ -11,6 +11,8 @@ export type LightColor =
 
 export type LineType =
   | "front_roofline"
+  | "peak"
+  | "side_roofline"
   | "porch_roof_wrap"
   | "pathway"
   | "other";

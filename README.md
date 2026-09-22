@@ -294,6 +294,16 @@ exports is already async with a stable signature so nothing else would need to c
   outside your team. The webhook has its own separate protection (`WORKIZ_WEBHOOK_SECRET`).
 - **Server-side PDF export route is a placeholder.** PDF generation happens client-side
   (`src/lib/pdfExport.ts`) so it can embed the canvas's rendered image directly.
+- **Front-photo selection is AI's best guess, not a certainty.** Confirmed directly on a real
+  Johnson County property: county assessor systems don't tag which photo shows the front of
+  the house — `selectFrontFacingPhoto()` in `src/lib/aiSuggest.server.ts` looks at up to 4
+  candidate photos and picks the one that looks like the front, but it can still pick wrong,
+  especially if none of the available photos actually show the front clearly.
+- **AI-traced rooflines are a starting point, not a finished estimate.** The prompt in
+  `src/lib/aiSuggest.server.ts` is written to trace only roof edges it can clearly see and to
+  return nothing rather than guess when it can't — but vision models still make mistakes on
+  partially-blocked or oddly-angled photos. Every suggested line must be reviewed against the
+  photo before export, the same as before.
 
 ## Future improvements
 

@@ -22,8 +22,8 @@
 // 3. Each function only covers its own county. Johnson County's function
 //    finds nothing outside Johnson County, KS; Jackson County's finds
 //    nothing outside Jackson County, MO. Both fall through gracefully
-//    (return null) rather than erroring — the normal Street View/aerial
-//    path picks up from there.
+//    (return an empty array) rather than erroring — the normal Street
+//    View/aerial path picks up from there.
 // 4. Both are slow (launch a real browser — several seconds per call) and
 //    need a real server to run on, not serverless/edge — Puppeteer needs
 //    to launch an actual Chromium binary.
@@ -36,11 +36,19 @@
 //    included, not just this file's own DOM queries. There is no selector
 //    that can reach the "CLICK FOR PROPERTY INFO" button inside it. The
 //    only way in is a coordinate-based mouse click at its on-screen pixel
-//    position, which is what fetchJacksonCountyPhoto does below — verified
+//    position, which is what fetchJacksonCountyPhotos does below — verified
 //    stable across repeated tests, but only at the exact viewport size the
 //    function sets (1006x533). If Jackson County ever changes that popup's
 //    layout or position, this breaks in a way no selector fix can address —
 //    only new coordinates found by re-testing manually.
+
+// 7. Neither county tags photos with which angle they show. Confirmed on a
+//    real Johnson County property while building this: the "most recent" /
+//    "currently selected" photo was a backyard shot, not the front. Both
+//    functions below now return EVERY candidate photo they find (not just
+//    one) — src/lib/propertyImage.server.ts uses
+//    src/lib/aiSuggest.server.ts's selectFrontFacingPhoto() to actually
+//    look at the candidates and pick the one that shows the front.
 
 import puppeteer from "puppeteer";
 
@@ -58,7 +66,7 @@ export interface CountyElevationPhoto {
  * src/lib/parseWorkizLead.ts don't reliably have a comma between street
  * and city — but cutting off at the state/zip suffix measurably improves
  * match odds without risking cutting real street text. Shared by both
- * fetchJohnsonCountyElevationPhoto and fetchJacksonCountyPhoto below.
+ * fetchJohnsonCountyElevationPhotos and fetchJacksonCountyPhotos below.
  */
 function trimForCountySearch(address: string): string {
   return address
@@ -116,7 +124,7 @@ function abbreviateStreetAddress(street: string): string {
     .join(" ");
 }
 
-export async function fetchJohnsonCountyElevationPhoto(
+export async function fetchJohnsonCountyElevationPhotos(
   address: string,
   /**
    * A clean "[house number] [street]" string from the geocoder's structured
@@ -125,12 +133,12 @@ export async function fetchJohnsonCountyElevationPhoto(
    * city name with no comma separating it from the street.
    */
   streetOnly?: string
-): Promise<CountyElevationPhoto | null> {
+): Promise<CountyElevationPhoto[]> {
   const log = (msg: string) => console.log(`[johnsonCountyPhoto] ${msg}`);
   const searchText = abbreviateStreetAddress(streetOnly || trimForCountySearch(address));
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
-    return null;
+    return [];
   }
   log(`starting for address "${address}" -> search text "${searchText}"`);
 
@@ -192,7 +200,7 @@ export async function fetchJohnsonCountyElevationPhoto(
     if (!clickedSuggestion) {
       log("no clickable suggestion found in the autocomplete list — address likely not in Johnson County");
       await browser.close();
-      return null;
+      return [];
     }
     log("clicked first suggestion");
 
@@ -202,53 +210,60 @@ export async function fetchJohnsonCountyElevationPhoto(
     // Give the iframe's own content a moment to finish loading images.
     await new Promise((resolve) => setTimeout(resolve, 3500));
 
-    const result = await page.evaluate(() => {
+    const results = await page.evaluate(() => {
       const frame = document.getElementById("ifrFrontElev") as HTMLIFrameElement | null;
-      if (!frame || !frame.contentDocument) return null;
+      if (!frame || !frame.contentDocument) return [];
 
       const imgs = Array.from(frame.contentDocument.querySelectorAll("img")).filter((img) =>
         img.src.includes("/docs/appr/pics/")
       );
-      if (imgs.length === 0) return null;
 
-      // Prefer whichever photo the page currently has selected/displayed as
-      // the main image; otherwise take the first one listed.
-      const chosen = imgs.find((img) => img.className.includes("imgSelected")) ?? imgs[0];
-
-      const dateMatch = chosen.alt.match(/(\d{2})\/(\d{2})\/(\d{4})/);
-      const imageDate = dateMatch ? `${dateMatch[3]}-${dateMatch[1]}-${dateMatch[2]}` : null;
-
-      return { imageUrl: chosen.src, imageDate };
+      // Dedupe by src — the site renders each photo twice (a thumbnail
+      // "img" copy and, for one of them, an "imgSelected" copy of the same
+      // underlying image).
+      const seen = new Set<string>();
+      const out: { imageUrl: string; imageDate: string | null }[] = [];
+      for (const img of imgs) {
+        if (seen.has(img.src)) continue;
+        seen.add(img.src);
+        const dateMatch = img.alt.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+        const imageDate = dateMatch ? `${dateMatch[3]}-${dateMatch[1]}-${dateMatch[2]}` : null;
+        out.push({ imageUrl: img.src, imageDate });
+      }
+      // Most recent first — an arbitrary but reasonable default ordering;
+      // the caller may re-pick based on which one actually shows the front.
+      out.sort((a, b) => (b.imageDate ?? "").localeCompare(a.imageDate ?? ""));
+      return out;
     });
 
     await browser.close();
-    log(result ? `success — found photo dated ${result.imageDate ?? "unknown"}` : "no photo images found inside the iframe");
-    return result;
+    log(results.length > 0 ? `success — found ${results.length} candidate photo(s)` : "no photo images found inside the iframe");
+    return results;
   } catch (err) {
     log(`FAILED with error: ${err instanceof Error ? err.message : String(err)}`);
     if (browser) {
       await browser.close().catch(() => {});
     }
-    return null;
+    return [];
   }
 }
 
 /**
  * Jackson County, Missouri (jcgis.jacksongov.org/parcelviewer). Same overall
- * idea as fetchJohnsonCountyElevationPhoto above, but this county's site
+ * idea as fetchJohnsonCountyElevationPhotos above, but this county's site
  * requires two coordinate-based clicks instead of pure selectors — see file
  * header note #6 for exactly why (a closed shadow root blocks any other
  * approach to that one popup).
  */
-export async function fetchJacksonCountyPhoto(
+export async function fetchJacksonCountyPhotos(
   address: string,
   streetOnly?: string
-): Promise<CountyElevationPhoto | null> {
+): Promise<CountyElevationPhoto[]> {
   const log = (msg: string) => console.log(`[jacksonCountyPhoto] ${msg}`);
   const searchText = abbreviateStreetAddress(streetOnly || trimForCountySearch(address));
   if (!searchText) {
     log(`skipped — trimmed search text was empty for address: "${address}"`);
-    return null;
+    return [];
   }
   log(`starting for address "${address}" -> search text "${searchText}"`);
 
@@ -315,7 +330,7 @@ export async function fetchJacksonCountyPhoto(
     if (!clickedSuggestion) {
       log("no clickable suggestion found in the autocomplete list — address likely not in Jackson County");
       await browser.close();
-      return null;
+      return [];
     }
     log("clicked first suggestion");
 
@@ -340,7 +355,7 @@ export async function fetchJacksonCountyPhoto(
     await page.click("#photostab");
     await new Promise((resolve) => setTimeout(resolve, 3500));
 
-    const imageUrl = await page.evaluate(() => {
+    const imageUrls = await page.evaluate(() => {
       function allImgsDeep(root: Document | ShadowRoot, out: HTMLImageElement[]) {
         root.querySelectorAll("img").forEach((img) => out.push(img as HTMLImageElement));
         root.querySelectorAll("*").forEach((el) => {
@@ -349,18 +364,26 @@ export async function fetchJacksonCountyPhoto(
       }
       const out: HTMLImageElement[] = [];
       allImgsDeep(document, out);
-      const photo = out.find((img) => img.className.includes("photo") && img.naturalWidth > 100);
-      return photo ? photo.src : null;
+      const photos = out.filter((img) => img.className.includes("photo") && img.naturalWidth > 100);
+      const seen = new Set<string>();
+      const urls: string[] = [];
+      for (const img of photos) {
+        if (seen.has(img.src)) continue;
+        seen.add(img.src);
+        urls.push(img.src);
+      }
+      return urls;
     });
 
     await browser.close();
-    log(imageUrl ? "success — found photo" : "no photo images found in the Photos tab");
-    return imageUrl ? { imageUrl, imageDate: null } : null;
+    log(imageUrls.length > 0 ? `success — found ${imageUrls.length} candidate photo(s)` : "no photo images found in the Photos tab");
+    // Jackson County's photos don't expose a parseable date anywhere in the DOM.
+    return imageUrls.map((imageUrl) => ({ imageUrl, imageDate: null }));
   } catch (err) {
     log(`FAILED with error: ${err instanceof Error ? err.message : String(err)}`);
     if (browser) {
       await browser.close().catch(() => {});
     }
-    return null;
+    return [];
   }
 }
