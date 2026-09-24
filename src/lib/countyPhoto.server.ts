@@ -207,9 +207,19 @@ export async function fetchJohnsonCountyElevationPhotos(
     // Wait for the results page's front-elevation-photo iframe to appear.
     await page.waitForSelector("#ifrFrontElev", { timeout: 15000 });
     log("#ifrFrontElev iframe appeared");
-    // Give the iframe's own content a moment to finish loading images.
-    await new Promise((resolve) => setTimeout(resolve, 3500));
-
+    // Wait for an actual assessor photo rather than relying on a fixed delay.
+    try {
+      await page.waitForFunction(
+        () => {
+          const frame = document.getElementById("ifrFrontElev") as HTMLIFrameElement | null;
+          return Boolean(frame?.contentDocument?.querySelector('img[src*="/docs/appr/pics/"]'));
+        },
+        { timeout: 12000 }
+      );
+      log("photo image appeared inside the iframe");
+    } catch {
+      log("photo image did not appear inside the iframe before timeout");
+    }
     const results = await page.evaluate(() => {
       const frame = document.getElementById("ifrFrontElev") as HTMLIFrameElement | null;
       if (!frame || !frame.contentDocument) return [];
