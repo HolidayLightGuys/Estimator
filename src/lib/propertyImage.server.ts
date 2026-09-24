@@ -80,6 +80,14 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
       log(`Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     });
+
+    if (candidates.length === 0) {
+      log("Johnson County returned no photos — retrying once before Google Street View fallback");
+      candidates = await fetchJohnsonCountyElevationPhotos(address, geo.streetOnly).catch((err) => {
+        log(`Johnson County retry threw: ${err instanceof Error ? err.message : String(err)}`);
+        return [];
+      });
+    }
   } else if (looksLikeMissouri) {
     candidates = await fetchJacksonCountyPhotos(address, geo.streetOnly).catch((err) => {
       log(`Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
