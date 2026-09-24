@@ -297,21 +297,31 @@ export interface FrontPhotoCandidate {
  * front-facing shot among the candidates.
  */
 export async function selectFrontFacingPhoto(
-  candidates: FrontPhotoCandidate[]
+  candidates: FrontPhotoCandidate[],
+  traceId = "unknown"
 ): Promise<FrontPhotoCandidate | null> {
+  const log = (message: string) => console.log(`[frontPhotoSelection:${traceId}] ${message}`);
   if (candidates.length === 0) return null;
-  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 1) {
+    log("one candidate supplied — using it without AI selection");
+    return candidates[0];
+  }
 
   const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) return candidates[0];
+  if (!apiKey) {
+    log("OPENAI_API_KEY is absent — using the first county candidate");
+    return candidates[0];
+  }
 
   const toCheck = candidates.slice(0, 4);
+  log(`downloading ${toCheck.length} of ${candidates.length} candidate image(s) for AI review`);
   const dataUrls = await Promise.all(toCheck.map((c) => imageUrlToDataUrl(c.imageUrl)));
 
   const usable: { candidate: FrontPhotoCandidate; dataUrl: string }[] = [];
   toCheck.forEach((candidate, i) => {
     if (dataUrls[i]) usable.push({ candidate, dataUrl: dataUrls[i]! });
   });
+  log(`${usable.length} candidate image(s) were downloadable`);
   if (usable.length === 0) return candidates[0];
   if (usable.length === 1) return usable[0].candidate;
 
@@ -329,6 +339,7 @@ Respond with ONLY valid JSON, no prose: {"frontIndex": <1-based number of the be
   });
 
   try {
+    log(`sending ${usable.length} image(s) to OpenAI for front-photo selection`);
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -342,19 +353,28 @@ Respond with ONLY valid JSON, no prose: {"frontIndex": <1-based number of the be
         messages: [{ role: "user", content }],
       }),
     });
-    if (!res.ok) return candidates[0];
+    if (!res.ok) {
+      log(`OpenAI returned HTTP ${res.status} — using the first county candidate`);
+      return candidates[0];
+    }
 
     const data = await res.json();
     const raw = data?.choices?.[0]?.message?.content;
-    if (!raw) return candidates[0];
+    if (!raw) {
+      log("OpenAI returned no message content — using the first county candidate");
+      return candidates[0];
+    }
 
     const parsed = JSON.parse(raw);
     const frontIndex = typeof parsed.frontIndex === "number" ? parsed.frontIndex : 0;
     if (frontIndex >= 1 && frontIndex <= usable.length) {
+      log(`OpenAI selected candidate ${frontIndex} of ${usable.length}`);
       return usable[frontIndex - 1].candidate;
     }
+    log(`OpenAI returned frontIndex=${String(frontIndex)} — using the first county candidate`);
     return candidates[0];
-  } catch {
+  } catch (error) {
+    log(`AI selection threw: ${error instanceof Error ? error.message : String(error)} — using the first county candidate`);
     return candidates[0];
   }
 }

@@ -21,8 +21,12 @@ const IMAGE_HEIGHT_PX = 400;
 const METERS_TO_FEET = 3.28084;
 
 export async function fetchPropertyImages(address: string): Promise<PropertyImagesResult> {
+  const traceId = Math.random().toString(36).slice(2, 8);
+  const log = (message: string) => console.log(`[propertyImage:${traceId}] ${message}`);
+  log(`started for address "${address}"`);
   const geo = await geocodeAddress(address);
   if ("error" in geo) {
+    log(`geocoding failed: ${geo.error}`);
     return { available: false, error: geo.error, streetView: null, aerial: null };
   }
 
@@ -64,47 +68,49 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
   const looksLikeKansas =
     !looksLikeMissouri &&
     (/\b(kansas|ks)\b/i.test(lastCommaSegment) || /\b(kansas|ks)\b/i.test(address));
-  console.log(
-    `[propertyImage] address "${address}" -> looksLikeKansas=${looksLikeKansas}, looksLikeMissouri=${looksLikeMissouri}`
-  );
+  log(`looksLikeKansas=${looksLikeKansas}, looksLikeMissouri=${looksLikeMissouri}`);
 
   let streetView: StreetViewImageInfo | null = null;
 
   let candidates: { imageUrl: string; imageDate: string | null }[] = [];
-  console.log(`[propertyImage] streetOnly from geocoder: ${geo.streetOnly ?? "(not available — falling back to regex trim)"}`);
+  log(`streetOnly from geocoder: ${geo.streetOnly ?? "(not available — falling back to regex trim)"}`);
 
   if (looksLikeKansas) {
     candidates = await fetchJohnsonCountyElevationPhotos(address, geo.streetOnly).catch((err) => {
-      console.log(`[propertyImage] Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Johnson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     });
   } else if (looksLikeMissouri) {
     candidates = await fetchJacksonCountyPhotos(address, geo.streetOnly).catch((err) => {
-      console.log(`[propertyImage] Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Jackson County scraper threw: ${err instanceof Error ? err.message : String(err)}`);
       return [];
     });
   } else {
-    console.log("[propertyImage] address didn't look Kansas- or Missouri-based — skipping county scraper entirely, going straight to Google/aerial");
+    log("address did not look Kansas- or Missouri-based — skipping county scraper entirely, going straight to Google/aerial");
   }
 
   let countyPhoto: { imageUrl: string; imageDate: string | null } | null = null;
   if (candidates.length > 0) {
-    console.log(`[propertyImage] ${candidates.length} county photo candidate(s) found — asking AI which one shows the front`);
-    countyPhoto = await selectFrontFacingPhoto(candidates).catch((err) => {
-      console.log(`[propertyImage] selectFrontFacingPhoto threw: ${err instanceof Error ? err.message : String(err)}`);
+    log(`${candidates.length} county photo candidate(s) found — asking AI which one shows the front`);
+    countyPhoto = await selectFrontFacingPhoto(candidates, traceId).catch((err) => {
+      log(`selectFrontFacingPhoto threw: ${err instanceof Error ? err.message : String(err)}`);
       return candidates[0] ?? null;
     });
   }
 
   if (countyPhoto) {
+    log(`returning county assessor photo${countyPhoto.imageDate ? ` dated ${countyPhoto.imageDate}` : ""}`);
     streetView = {
       imageUrl: countyPhoto.imageUrl,
       source: "county_assessor",
       imageDate: countyPhoto.imageDate,
     };
   } else if (apiKey) {
+    log("no county photo selected — attempting Google Street View");
     streetView = await tryBuildStreetView(geo.lat, geo.lng, apiKey);
   }
+
+  log(`completed with ${streetView?.source ?? "no"} street-level photo`);
 
   return {
     available: true,
