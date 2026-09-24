@@ -41,7 +41,12 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, {
   { imageUrl, lines, onLinesChange, calibration, onCalibrationChange },
   ref
 ) {
-  const [image] = useImage(imageUrl ?? "", "anonymous");
+  const canvasImageUrl =
+  imageUrl?.includes("ims.jocogov.org/")
+    ? `/api/county-image?url=${encodeURIComponent(imageUrl)}`
+    : imageUrl ?? "";
+
+const [image] = useImage(canvasImageUrl, "anonymous");
   const [mode, setMode] = useState<Mode>("idle");
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [draftType, setDraftType] = useState<LineType>("front_roofline");
