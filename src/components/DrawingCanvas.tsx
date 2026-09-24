@@ -42,7 +42,7 @@ const DrawingCanvas = forwardRef<DrawingCanvasHandle, {
   ref
 ) {
   const canvasImageUrl =
-  imageUrl?.includes("ims.jocogov.org/")
+  imageUrl?.includes("jocogov.org/")
     ? `/api/county-image?url=${encodeURIComponent(imageUrl)}`
     : imageUrl ?? "";
 

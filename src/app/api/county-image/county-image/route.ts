@@ -13,9 +13,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Invalid image URL." }, { status: 400 });
   }
 
+  const isJohnsonCountyHost =
+    source.hostname === "jocogov.org" ||
+    source.hostname.endsWith(".jocogov.org");
+
   if (
     (source.protocol !== "http:" && source.protocol !== "https:") ||
-    source.hostname !== "ims.jocogov.org"
+    !isJohnsonCountyHost
   ) {
     return NextResponse.json({ error: "Image host is not allowed." }, { status: 400 });
   }
