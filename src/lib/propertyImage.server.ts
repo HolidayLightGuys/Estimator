@@ -98,6 +98,7 @@ export async function fetchPropertyImages(address: string): Promise<PropertyImag
     });
   }
 
+  console.log(`[propertyImage] after county selection: ${countyPhoto ? "county photo selected" : "no county photo selected"}`);
   if (countyPhoto) {
     log(`returning county assessor photo${countyPhoto.imageDate ? ` dated ${countyPhoto.imageDate}` : ""}`);
     streetView = {
